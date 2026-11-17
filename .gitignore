@@ -1,0 +1,7 @@
+emblem.glb
+__pycache__/
+.DS_Store
+.vercel
+*.mp4
+*.webm
+*.gif

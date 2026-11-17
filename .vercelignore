@@ -1,0 +1,6 @@
+emblem.glb
+*.py
+*.mp4
+*.webm
+*.gif
+__pycache__

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dragon Emblem 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #08080a; overflow: hidden; font: 13px system-ui, sans-serif; color: #9a9aa2; }
+  #info { position: fixed; left: 16px; bottom: 14px; pointer-events: none; }
+  #ui { position: fixed; right: 16px; top: 14px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: calc(100vw - 32px); }
+  label { display: flex; align-items: center; gap: 6px; color: #ccc; }
+  input[type=range] { width: 90px; }
+  button { background: #1a1a1f; color: #ccc; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="ui">
+  <label>Kir <input id="grime" type="range" min="0" max="1" step="0.01" value="0.8"></label>
+  <label>Aşınma <input id="wear" type="range" min="0" max="1" step="0.01" value="0.8"></label>
+  <label>Temper <input id="temper" type="range" min="0" max="1" step="0.01" value="0.35"></label>
+  <label>Işık <input id="expo" type="range" min="0.2" max="1.6" step="0.01" value="0.9"></label>
+  <button id="env">Ortam: Stüdyo</button>
+  <button id="fx">Efektler: Açık</button>
+  <button id="wire">Wireframe</button>
+  <button id="spin">Döndür</button>
+</div>
+<div id="info">Yükleniyor…</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const params = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x08080a);
+scene.environmentIntensity = 0.55;
+scene.environmentRotation.y = 2.2;
+
+// --- HDRI ortamları (Poly Haven, CC0)
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envs = {};
+const ENV_FILES = { 'Stüdyo': 'hdri/studio_small_09_1k.hdr', 'Atölye': 'hdri/abandoned_workshop_02_1k.hdr' };
+let envName = params.get('env') === 'workshop' ? 'Atölye' : 'Stüdyo';
+const loadEnv = (name) => new Promise((res) => {
+  if (envs[name]) return res(envs[name]);
+  new RGBELoader().load(ENV_FILES[name], (t) => {
+    t.mapping = THREE.EquirectangularReflectionMapping;
+    envs[name] = pmrem.fromEquirectangular(t).texture; t.dispose(); res(envs[name]);
+  });
+});
+const setEnv = async (name) => {
+  envName = name; scene.environment = await loadEnv(name);
+  document.getElementById('env').textContent = `Ortam: ${name}`;
+};
+setEnv(envName);
+
+const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.01, 50);
+camera.position.set(0, 0, 2.3);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.minDistance = 0.15;
+
+// yandan-yukarıdan sıyıran ana ışık, rölyefin kendi üstüne gölge düşürmesi için shadow map'li
+const key = new THREE.DirectionalLight(0xfff1e0, 2.0);
+key.position.set(-2.4, 2.0, 0.9);
+key.castShadow = params.get("shadow") !== "0";
+key.shadow.mapSize.set(4096, 4096);
+Object.assign(key.shadow.camera, { left: -0.65, right: 0.65, top: 0.65, bottom: -0.65, near: 0.5, far: 7 });
+key.shadow.bias = -0.0002; key.shadow.normalBias = 0.002; key.shadow.radius = 2;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xbfd0ff, 0.7); rim.position.set(1.8, -0.4, -1); scene.add(rim);
+const back = new THREE.DirectionalLight(0xffffff, 0.9); back.position.set(1.2, 1.4, -2); scene.add(back);
+
+const loadTex = (url) => {
+  const t = new THREE.TextureLoader().load(url);
+  t.flipY = false; t.colorSpace = THREE.NoColorSpace; t.anisotropy = 8;
+  return t;
+};
+// *texture.png: R = albedo, G = roughness, B = cavity (1 = açık yüzey, 0 = oyuk)
+// *normal.png : object-space normal (tam yüzey normali, 8x çözünürlük)
+// *curv.png   : dışbükeylik (sırt/köşe = 1) -> kenar aşınması
+const sideTex = loadTex('side_texture.png');
+sideTex.wrapS = sideTex.wrapT = THREE.RepeatWrapping;
+const U = { grimeAmt: { value: 0.8 }, wearAmt: { value: 0.8 } };
+
+const detailShader = (curvTex) => (s) => {
+  Object.assign(s.uniforms, U, { sideTex: { value: sideTex }, curvMap: { value: curvTex } });
+  s.vertexShader = 'varying vec3 vObjPos;\nvarying vec3 vObjN;\n' + s.vertexShader
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvObjPos = position; vObjN = normal;');
+  s.fragmentShader = `uniform sampler2D sideTex;\nuniform sampler2D curvMap;\nuniform float grimeAmt;\nuniform float wearAmt;
+varying vec3 vObjPos;\nvarying vec3 vObjN;\n` + s.fragmentShader
+    .replace('#include <map_fragment>', `
+      // dik yüzeylerde planar UV gerilir: triplanar yan texture'ı + geometrik normal
+      vec3 an = abs(normalize(vObjN));
+      float steep = smoothstep(0.8, 0.4, an.z);
+      vec3 tw = pow(an, vec3(4.0)); tw /= (tw.x + tw.y + tw.z);
+      vec3 P = vObjPos * 14.0;
+      vec3 tri = texture2D(sideTex, P.zy).rgb * tw.x + texture2D(sideTex, P.xz).rgb * tw.y
+               + texture2D(sideTex, P.xy).rgb * tw.z;
+      vec3 det = mix(texture2D(map, vMapUv).rgb, tri, steep);
+      float conv = mix(texture2D(curvMap, vMapUv).r, smoothstep(0.5, 0.8, tri.r) * 0.5, steep);
+
+      // büyük ölçekli leke gürültüsü (bulanık mip)
+      vec3 Q = vObjPos * 1.6;
+      float blot = texture2D(sideTex, Q.xy, 5.0).r * tw.z + texture2D(sideTex, Q.zy, 5.0).r * tw.x
+                 + texture2D(sideTex, Q.xz, 5.0).r * tw.y;
+      float blot2 = texture2D(sideTex, vObjPos.xy * 5.3 + 0.37, 3.0).r;
+      float tarnish = smoothstep(0.42, 0.58, blot * 0.65 + blot2 * 0.35);
+
+      float cav = 1.0 - det.b;
+      float recess = smoothstep(0.38, 0.12, det.r) * (1.0 - steep * 0.5);
+      // kenar aşınması: dışbükey sırtlar el/sürtünmeyle cilalanmış parlak çelik
+      float polish = smoothstep(0.12, 0.55, conv) * wearAmt * (1.0 - recess * 0.6);
+      float grime = clamp(max(smoothstep(0.18, 0.7, cav), recess) * 0.9 + tarnish * 0.35, 0.0, 1.0)
+                  * grimeAmt * (1.0 - polish);
+
+      vec3 steel = vec3(0.42, 0.42, 0.43) * mix(0.10, 0.62, det.r) * mix(0.72, 1.0, det.b);
+      steel *= mix(1.0, 0.5, tarnish * grimeAmt) * mix(vec3(1.0), vec3(1.0, 0.92, 0.80), tarnish * grimeAmt);
+      steel = mix(steel, vec3(0.66, 0.67, 0.69), polish);
+      vec3 dirt = vec3(0.045, 0.038, 0.03);
+      diffuseColor.rgb = mix(steel, dirt, grime);
+      float heat = smoothstep(0.35, 0.75, blot2) * (1.0 - grime);`)
+    .replace('#include <roughnessmap_fragment>',
+      'float roughnessFactor = clamp(mix(mix(det.g + 0.1 * grimeAmt, 0.92, grime), 0.13, polish), 0.05, 1.0);')
+    .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = 1.0 - 0.85 * grime;')
+    .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize(mix(normal, nonPerturbedNormal, steep));')
+    // temper/ısıl renk: ince film (iridescence) — leke maskesi ve değişken kalınlık
+    .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
+      #ifdef USE_IRIDESCENCE
+        material.iridescence *= heat;
+        material.iridescenceThickness = mix(220.0, 560.0, blot);
+      #endif`);
+};
+const makeMat = (texUrl, normalUrl, curvUrl) => {
+  const m = new THREE.MeshPhysicalMaterial({
+    metalness: 1, roughness: 1, map: loadTex(texUrl),
+    iridescence: 0.35, iridescenceIOR: 1.8, iridescenceThicknessRange: [220, 560],
+  });
+  if (normalUrl) { m.normalMap = loadTex(normalUrl); m.normalMapType = THREE.ObjectSpaceNormalMap; }
+  m.onBeforeCompile = detailShader(loadTex(curvUrl));
+  m.customProgramCacheKey = () => texUrl + (normalUrl ?? '');
+  return m;
+};
+const mats = {
+  front: makeMat('texture.png', 'normal.png', 'curv.png'),
+  back: makeMat('back_texture.png', 'back_normal.png', 'back_curv.png'),
+  wall: makeMat('back_texture.png', null, 'back_curv.png'),
+};
+
+// --- post-processing: GTAO (girintilerde temas gölgesi) + hafif bloom (parlak sırtlar)
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
+gtao.updateGtaoMaterial({ radius: 0.04, distanceExponent: 1.5, thickness: 0.02, scale: 1.2, samples: 16 });
+gtao.blendIntensity = 1.0;
+composer.addPass(gtao);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.35, 0.92);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+let fx = params.get('fx') !== '0';
+
+const info = document.getElementById('info');
+let group;
+let spin = !params.has('rot');
+new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load('emblem.web.glb', (g) => {
+  group = g.scene;
+  let tris = 0, verts = 0;
+  group.traverse((o) => {
+    if (!o.isMesh) return;
+    o.material = mats[o.material.name] ?? mats.front;
+    o.castShadow = o.receiveShadow = true;
+    tris += o.geometry.index.count / 3; verts += o.geometry.attributes.position.count;
+  });
+  if (params.has('rot')) group.rotation.y = THREE.MathUtils.degToRad(+params.get('rot'));
+  scene.add(group);
+  info.textContent = `${tris.toLocaleString('tr-TR')} üçgen · ${verts.toLocaleString('tr-TR')} vertex — sürükle: döndür, tekerlek: zoom`;
+}, (e) => { if (e.total) info.textContent = `Yükleniyor… %${Math.round(e.loaded / e.total * 100)}`; });
+
+const $ = (id) => document.getElementById(id);
+$('expo').oninput = (e) => renderer.toneMappingExposure = +e.target.value;
+$('grime').oninput = (e) => U.grimeAmt.value = +e.target.value;
+$('wear').oninput = (e) => U.wearAmt.value = +e.target.value;
+$('temper').oninput = (e) => Object.values(mats).forEach((m) => m.iridescence = +e.target.value);
+$('env').onclick = () => setEnv(envName === 'Stüdyo' ? 'Atölye' : 'Stüdyo');
+$('fx').onclick = () => { fx = !fx; $('fx').textContent = `Efektler: ${fx ? 'Açık' : 'Kapalı'}`; };
+$('spin').onclick = () => spin = !spin;
+$('wire').onclick = () => Object.values(mats).forEach((m) => m.wireframe = !m.wireframe);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight);
+});
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  if (group && spin) group.rotation.y += dt * 0.35;
+  controls.update();
+  fx ? composer.render() : renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
