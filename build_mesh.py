@@ -1,12 +1,12 @@
-"""Görselden yüksek poligonlu, iki yüzlü emblem mesh'i + detay map'leri üretir.
+"""Builds a high-poly, double-sided emblem mesh + detail maps from an image.
 
-Kullanım: python3 build_mesh.py [mesh_scale] [detail_scale]   (varsayılan 4, 8)
-  mesh_scale   : mesh grid'i = kaynak piksel x mesh_scale
-  detail_scale : map'ler = kaynak piksel x detail_scale (mesh_scale'in katı olmalı)
-Çıktılar:
-  emblem.glb  : 3 primitive -> front / back / wall (material adları aynı)
-  texture.png, normal.png            : ön yüz (R=albedo, G=roughness, B=cavity; object-space normal)
-  back_texture.png, back_normal.png  : arka yüz (+ yan kenar aynı texture'ı kullanır)
+Usage: python3 build_mesh.py [mesh_scale] [detail_scale]   (default 4, 8)
+  mesh_scale   : mesh grid = source pixels x mesh_scale
+  detail_scale : maps = source pixels x detail_scale (must be a multiple of mesh_scale)
+Outputs:
+  emblem.glb  : 3 primitive -> front / back / wall (same material names)
+  texture.png, normal.png            : front face (R=albedo, G=roughness, B=cavity; object-space normal)
+  back_texture.png, back_normal.png  : back face (+ side wall uses the same texture)
 """
 import sys, json, struct
 import numpy as np
@@ -23,10 +23,10 @@ src = Image.open("source.png").convert("L")
 W0, H0 = src.size
 Wd, Hd = W0 * DS, H0 * DS
 L = np.clip(np.asarray(src.resize((Wd, Hd), Image.LANCZOS), dtype=np.float32) / 255.0, 0, 1)
-g = lambda a, s: ndi.gaussian_filter(a, s * DS)            # sigma kaynak piksel cinsinden
-px = 1.0 / Hd                                              # model yüksekliği = 1 birim
+g = lambda a, s: ndi.gaussian_filter(a, s * DS)            # sigma in source pixels
+px = 1.0 / Hd                                              # model height = 1 unit
 
-# ---------------- maske
+# ---------------- mask
 mask = g(L, 0.6) > 0.07
 mask = ndi.binary_opening(mask, iterations=STEP)
 lab, n = ndi.label(mask)
@@ -35,7 +35,7 @@ keep = np.zeros(n + 1, bool); keep[1:] = sizes > 400 * DS * DS
 mask = keep[lab]
 mask = (ndi.binary_fill_holes(mask) & (g(L, 1.0) > 0.03)) | mask
 
-# kenar çentikleri
+# edge notches
 dist0 = ndi.distance_transform_edt(mask).astype(np.float32) / DS
 chipnoise = g(rng.standard_normal((Hd, Wd)).astype(np.float32), 1.1)
 chipnoise /= chipnoise.std()
@@ -46,7 +46,7 @@ del dist0
 
 
 def micro_layer(expo, seed, density):
-    """Prosedürel aşınma: yön kümeli çizikler (+burr), darbe çukurları, dövme dokusu."""
+    """Procedural wear: direction-clustered scratches (+burr), impact pits, hammered texture."""
     r = np.random.default_rng(seed)
     img = Image.new("F", (Wd, Hd), 0.0)
     dr = ImageDraw.Draw(img)
@@ -74,8 +74,8 @@ def micro_layer(expo, seed, density):
 
 
 def objspace_normal(h, zsign):
-    """h: yüzeyin dışa doğru yüksekliği. zsign=+1 ön (+z bakar), -1 arka."""
-    gy, gx = np.gradient(h, px)                           # gy: satır (aşağı) yönü
+    """h: outward surface height. zsign=+1 front (faces +z), -1 back."""
+    gy, gx = np.gradient(h, px)                           # gy: row (downward) direction
     nrm = np.stack([-gx, gy, np.full_like(gx, zsign)], -1)
     nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
     out = ((nrm * 0.5 + 0.5) * 255).astype(np.uint8)
@@ -84,7 +84,7 @@ def objspace_normal(h, zsign):
 
 
 def save_curv(path, h, zsign):
-    """Dışbükeylik (sırt/köşe = 1) -> kenar aşınması için. Difference-of-Gaussians."""
+    """Convexity (ridge/corner = 1) for edge wear. Difference-of-Gaussians."""
     lap = (g(h, 0.5) - g(h, 2.5)) * zsign
     lap = np.where(mask, lap, 0)
     k = np.percentile(lap[mask & (lap > 0)], 96)
@@ -95,7 +95,7 @@ def save_tex(path, albedo, rough, cav):
     Image.fromarray((np.stack([albedo, rough, 1 - cav], -1) * 255).astype(np.uint8)).save(path, optimize=True)
 
 
-# ================= ÖN YÜZ
+# ================= FRONT FACE
 bevel = g(np.sqrt(np.clip(dist / 9.0, 0, 1)), 1.0)
 Ls = g(L, 0.35)
 low = g(L, 6)
@@ -112,12 +112,12 @@ cav = np.clip((g(height, 1.5) - height) * 260, 0, 1)
 save_tex("texture.png",
          np.clip(Ls * (1 - 0.55 * cav) + scr * 0.22 * expo + burr * 0.1, 0, 1),
          np.clip(0.28 + 0.4 * (1 - Ls) + 0.25 * cav + 0.15 * scr - 0.1 * bevel, 0.08, 0.95), cav)
-# görsel kaynaklı JPEG gürültüsünü normal map'te bastır (geometride kalıyor)
+# suppress source-image JPEG noise in the normal map (it stays in the geometry)
 Image.fromarray(objspace_normal(height - fine * 0.007 * mask + g(fine, 0.25) * 0.004 * mask, 1)).save("normal.png", optimize=True)
 save_curv("curv.png", height, 1)
 del micro, scr, burr, cav, mid, low, Ls, L
 
-# ================= ARKA YÜZ (döküm arkası: yuvarlak kenar, dalgalanma, kendi aşınması)
+# ================= BACK FACE (cast back: rounded edge, undulation, its own wear)
 bevel_b = g(np.sqrt(np.clip(dist / 6.0, 0, 1)), 0.7)
 patina = g(rng.standard_normal((Hd, Wd)).astype(np.float32), 10); patina /= patina.std() + 1e-9
 patina2 = g(rng.standard_normal((Hd, Wd)).astype(np.float32), 3); patina2 /= patina2.std() + 1e-9
@@ -132,7 +132,7 @@ Image.fromarray(objspace_normal(hb, -1)).save("back_normal.png", optimize=True)
 save_curv("back_curv.png", hb, 1)
 del micro_b, scr_b, burr_b, cav_b, patina, patina2, chipnoise
 
-# ================= YAN TEXTURE (dik yüzeyler için tileable, triplanar)
+# ================= SIDE TEXTURE (tileable, triplanar for steep walls)
 T = 1024
 tr = np.random.default_rng(303)
 timg = Image.new("F", (T, T), 0.0)
@@ -194,13 +194,13 @@ nb = {}
 for u, v in bedges:
     nb.setdefault(u, []).append(v); nb.setdefault(v, []).append(u)
 nbr = np.array([nb[v][:2] if len(nb[v]) >= 2 else [nb[v][0]] * 2 for v in bl])
-for _ in range(6):                                         # sınırı 2D'de yumuşat
+for _ in range(6):                                         # smooth the outline in 2D
     t_ = xy.copy()
     xy[bl] = 0.5 * t_[bl] + 0.25 * (t_[nbr[:, 0]] + t_[nbr[:, 1]])
 zf[bl] = np.minimum(zf[bl], 0.002)
 zb[bl] = np.maximum(zb[bl], BACK0 - 0.0005)
 
-# dışa bakan 2D kenar normalleri
+# outward-facing 2D edge normals
 en = np.zeros((nv, 2), np.float32)
 dxy = xy[bedges[:, 1]] - xy[bedges[:, 0]]
 edge_n = np.stack([dxy[:, 1], -dxy[:, 0]], 1)
@@ -209,13 +209,13 @@ bn = en[bl]
 for _ in range(4):
     bn = 0.5 * bn + 0.25 * (bn[remap[nbr[:, 0]]] + bn[remap[nbr[:, 1]]])
 bn /= np.linalg.norm(bn, axis=1, keepdims=True) + 1e-12
-probe = xy[bl] + bn * 3 * mpx                              # yön kontrolü: dışarısı maskede olmamalı
+probe = xy[bl] + bn * 3 * mpx                              # orientation check: outside must not be in the mask
 pxp = np.clip((probe[:, 0] / mpx + W / 2).astype(int), 0, W - 1)
 pyp = np.clip((H / 2 - probe[:, 1] / mpx).astype(int), 0, H - 1)
 if mmask[pyp, pxp].mean() > 0.5:
     bn = -bn
 
-# ---- yan kenar: R halkalı, dışa bombeli yuvarlak profil + 3D gürültü ezikleri
+# ---- side wall: R rings, outward-bulging rounded profile + 3D noise dents
 R = 10
 vol = ndi.gaussian_filter(rng.standard_normal((96, 96, 96)).astype(np.float32), 2.0, mode="wrap")
 vol /= vol.std()
@@ -234,7 +234,7 @@ for j in range(R + 1):
     p = np.concatenate([bxy + bn * (0.32 * depth * s)[:, None], z[:, None]], 1)
     dent = (0.00035 * noise3(vol, p, 0.0005) - 0.0012 * np.clip(noise3(vol2, p, 0.0004) - 1.4, 0, None))
     p[:, :2] += bn * (dent * s ** 0.5)[:, None]
-    off = depth * 1.3 * t                                  # UV derinlik boyunca içe kayar -> gerilme yok
+    off = depth * 1.3 * t                                  # UV shifts inward along depth -> no stretching
     wuv.append(np.stack([buv[:, 0] - bn[:, 0] * off / (W * mpx),
                          buv[:, 1] + bn[:, 1] * off / (H * mpx)], 1))
     wpos.append(p)
@@ -262,8 +262,8 @@ def normals(P, F):
 FN, ffn = normals(FP, front)
 BN, bfn = normals(BP, BF)
 WN, wfn = normals(WP, WF)
-assert ffn[:, 2].sum() > 0 and bfn[:, 2].sum() < 0, "ön/arka sargı yönü ters"
-# kenar yüzleri dışa mı bakıyor? (yüz normali · kenar normali)
+assert ffn[:, 2].sum() > 0 and bfn[:, 2].sum() < 0, "front/back winding is reversed"
+# do wall faces point outward? (face normal · edge normal)
 edge_of_face = np.tile(np.arange(len(bedges)), 2 * R)
 wout = (wfn[:, :2] * bn[remap[bedges[edge_of_face, 0]]]).sum()
 if wout < 0:

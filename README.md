@@ -1,38 +1,39 @@
 # Skyrim Emblem 3D
 
-Tek bir 2D görselden prosedürel olarak üretilmiş, yüksek poligonlu (3,7M üçgen) ve yıpranmış demir
-görünümlü 3D ejderha emblemi. Tarayıcıda gerçek zamanlı çalışır (three.js).
+A high-poly (3.7M triangles), worn-iron 3D dragon emblem generated procedurally from a single 2D
+image. Renders in real time in the browser with three.js.
 
-**Canlı demo:** https://skyrim-emblem-3d.vercel.app
+**Live demo:** https://skyrim-emblem-3d.vercel.app
 
 ![preview](preview.png)
 
-## Ne var içinde
+## What's inside
 
-- `build_mesh.py`: `source.png`'den height field çıkarır; ön/arka/yan yüzlü mesh ile albedo,
-  roughness, cavity, object-space normal ve curvature map'lerini üretir.
-- `index.html`: three.js viewer. HDRI ortam (Poly Haven, CC0), curvature'a göre kenar parlaması ve
-  oksitlenme, GTAO, bloom, 4096 shadow map, iridescence ile ısıl renk (temper).
-- Arayüzde kir, aşınma, temper, ışık, ortam ve wireframe kontrolleri var.
+- `build_mesh.py`: extracts a height field from `source.png` and builds a front/back/side-wall mesh
+  plus albedo, roughness, cavity, object-space normal and curvature maps.
+- `index.html`: three.js viewer. HDRI environments (Poly Haven, CC0), curvature-driven edge polish and
+  oxidation, GTAO, bloom, 4096 shadow map, iridescence-based heat tint (temper).
+- UI controls for grime, wear, temper, light, environment and wireframe.
 
-## 3D dosya
+## 3D files
 
-GLB dosyaları [Releases](../../releases) sayfasında:
-- `emblem.glb`: ham mesh (106 MB)
-- `emblem.web.glb`: meshopt ile sıkıştırılmış hâli (16 MB, `EXT_meshopt_compression`)
+GLB files are on the [Releases](../../releases) page:
+- `emblem.glb`: raw mesh (106 MB)
+- `emblem.web.glb`: meshopt-compressed (16 MB, `EXT_meshopt_compression`)
 
-Map'ler repo kökünde PNG olarak duruyor (R = albedo, G = roughness, B = cavity).
+The maps live in the repo root as PNGs (R = albedo, G = roughness, B = cavity). The GLBs carry no
+embedded textures, so other viewers show plain geometry; the worn look comes from the viewer's shader.
 
-## Çalıştırma
+## Running locally
 
 ```bash
-python3 -m http.server 8000   # sonra http://localhost:8000
+python3 -m http.server 8000   # then open http://localhost:8000
 ```
 
-Yeniden üretmek için: `python3 build_mesh.py 4 8` (numpy, pillow, scipy gerekir).
+To regenerate: `python3 build_mesh.py 4 8` (requires numpy, pillow, scipy).
 
-## Not
+## Disclaimer
 
-Bu proje ticari olmayan bir fan art çalışmasıdır. The Elder Scrolls V: Skyrim ve ejderha emblemi
-Bethesda Softworks / ZeniMax Media'nın tescilli markalarıdır; bu proje onlarla bağlantılı değildir.
-HDRI'lar Poly Haven'dan (CC0).
+Non-commercial fan art. The Elder Scrolls V: Skyrim and its dragon emblem are trademarks of
+Bethesda Softworks / ZeniMax Media; this project is not affiliated with them.
+HDRIs from Poly Haven (CC0).

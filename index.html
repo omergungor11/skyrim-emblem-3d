@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -21,16 +21,16 @@
 </head>
 <body>
 <div id="ui">
-  <label>Kir <input id="grime" type="range" min="0" max="1" step="0.01" value="0.8"></label>
-  <label>Aşınma <input id="wear" type="range" min="0" max="1" step="0.01" value="0.8"></label>
+  <label>Grime <input id="grime" type="range" min="0" max="1" step="0.01" value="0.8"></label>
+  <label>Wear <input id="wear" type="range" min="0" max="1" step="0.01" value="0.8"></label>
   <label>Temper <input id="temper" type="range" min="0" max="1" step="0.01" value="0.35"></label>
-  <label>Işık <input id="expo" type="range" min="0.2" max="1.6" step="0.01" value="0.9"></label>
-  <button id="env">Ortam: Stüdyo</button>
-  <button id="fx">Efektler: Açık</button>
+  <label>Light <input id="expo" type="range" min="0.2" max="1.6" step="0.01" value="0.9"></label>
+  <button id="env">Env: Studio</button>
+  <button id="fx">Effects: On</button>
   <button id="wire">Wireframe</button>
-  <button id="spin">Döndür</button>
+  <button id="spin">Spin</button>
 </div>
-<div id="info">Yükleniyor…</div>
+<div id="info">Loading…</div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -58,11 +58,11 @@ scene.background = new THREE.Color(0x08080a);
 scene.environmentIntensity = 0.55;
 scene.environmentRotation.y = 2.2;
 
-// --- HDRI ortamları (Poly Haven, CC0)
+// --- HDRI environments (Poly Haven, CC0)
 const pmrem = new THREE.PMREMGenerator(renderer);
 const envs = {};
-const ENV_FILES = { 'Stüdyo': 'hdri/studio_small_09_1k.hdr', 'Atölye': 'hdri/abandoned_workshop_02_1k.hdr' };
-let envName = params.get('env') === 'workshop' ? 'Atölye' : 'Stüdyo';
+const ENV_FILES = { 'Studio': 'hdri/studio_small_09_1k.hdr', 'Workshop': 'hdri/abandoned_workshop_02_1k.hdr' };
+let envName = params.get('env') === 'workshop' ? 'Workshop' : 'Studio';
 const loadEnv = (name) => new Promise((res) => {
   if (envs[name]) return res(envs[name]);
   new RGBELoader().load(ENV_FILES[name], (t) => {
@@ -72,7 +72,7 @@ const loadEnv = (name) => new Promise((res) => {
 });
 const setEnv = async (name) => {
   envName = name; scene.environment = await loadEnv(name);
-  document.getElementById('env').textContent = `Ortam: ${name}`;
+  document.getElementById('env').textContent = `Env: ${name}`;
 };
 setEnv(envName);
 
@@ -81,7 +81,7 @@ camera.position.set(0, 0, 2.3);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.minDistance = 0.15;
 
-// yandan-yukarıdan sıyıran ana ışık, rölyefin kendi üstüne gölge düşürmesi için shadow map'li
+// grazing key light from the side/top, with a shadow map so the relief shadows itself
 const key = new THREE.DirectionalLight(0xfff1e0, 2.0);
 key.position.set(-2.4, 2.0, 0.9);
 key.castShadow = params.get("shadow") !== "0";
@@ -97,9 +97,9 @@ const loadTex = (url) => {
   t.flipY = false; t.colorSpace = THREE.NoColorSpace; t.anisotropy = 8;
   return t;
 };
-// *texture.png: R = albedo, G = roughness, B = cavity (1 = açık yüzey, 0 = oyuk)
-// *normal.png : object-space normal (tam yüzey normali, 8x çözünürlük)
-// *curv.png   : dışbükeylik (sırt/köşe = 1) -> kenar aşınması
+// *texture.png: R = albedo, G = roughness, B = cavity (1 = exposed surface, 0 = crevice)
+// *normal.png : object-space normal (full surface normal, 8x resolution)
+// *curv.png   : convexity (ridge/corner = 1) -> edge wear
 const sideTex = loadTex('side_texture.png');
 sideTex.wrapS = sideTex.wrapT = THREE.RepeatWrapping;
 const U = { grimeAmt: { value: 0.8 }, wearAmt: { value: 0.8 } };
@@ -111,7 +111,7 @@ const detailShader = (curvTex) => (s) => {
   s.fragmentShader = `uniform sampler2D sideTex;\nuniform sampler2D curvMap;\nuniform float grimeAmt;\nuniform float wearAmt;
 varying vec3 vObjPos;\nvarying vec3 vObjN;\n` + s.fragmentShader
     .replace('#include <map_fragment>', `
-      // dik yüzeylerde planar UV gerilir: triplanar yan texture'ı + geometrik normal
+      // planar UVs stretch on steep walls: use triplanar side texture + geometric normal
       vec3 an = abs(normalize(vObjN));
       float steep = smoothstep(0.8, 0.4, an.z);
       vec3 tw = pow(an, vec3(4.0)); tw /= (tw.x + tw.y + tw.z);
@@ -121,7 +121,7 @@ varying vec3 vObjPos;\nvarying vec3 vObjN;\n` + s.fragmentShader
       vec3 det = mix(texture2D(map, vMapUv).rgb, tri, steep);
       float conv = mix(texture2D(curvMap, vMapUv).r, smoothstep(0.5, 0.8, tri.r) * 0.5, steep);
 
-      // büyük ölçekli leke gürültüsü (bulanık mip)
+      // large-scale stain noise (blurred mip)
       vec3 Q = vObjPos * 1.6;
       float blot = texture2D(sideTex, Q.xy, 5.0).r * tw.z + texture2D(sideTex, Q.zy, 5.0).r * tw.x
                  + texture2D(sideTex, Q.xz, 5.0).r * tw.y;
@@ -130,7 +130,7 @@ varying vec3 vObjPos;\nvarying vec3 vObjN;\n` + s.fragmentShader
 
       float cav = 1.0 - det.b;
       float recess = smoothstep(0.38, 0.12, det.r) * (1.0 - steep * 0.5);
-      // kenar aşınması: dışbükey sırtlar el/sürtünmeyle cilalanmış parlak çelik
+      // edge wear: convex ridges polished to bright steel by handling/friction
       float polish = smoothstep(0.12, 0.55, conv) * wearAmt * (1.0 - recess * 0.6);
       float grime = clamp(max(smoothstep(0.18, 0.7, cav), recess) * 0.9 + tarnish * 0.35, 0.0, 1.0)
                   * grimeAmt * (1.0 - polish);
@@ -145,7 +145,7 @@ varying vec3 vObjPos;\nvarying vec3 vObjN;\n` + s.fragmentShader
       'float roughnessFactor = clamp(mix(mix(det.g + 0.1 * grimeAmt, 0.92, grime), 0.13, polish), 0.05, 1.0);')
     .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = 1.0 - 0.85 * grime;')
     .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nnormal = normalize(mix(normal, nonPerturbedNormal, steep));')
-    // temper/ısıl renk: ince film (iridescence) — leke maskesi ve değişken kalınlık
+    // temper/heat tint: thin film (iridescence) with a stain mask and varying thickness
     .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
       #ifdef USE_IRIDESCENCE
         material.iridescence *= heat;
@@ -168,7 +168,7 @@ const mats = {
   wall: makeMat('back_texture.png', null, 'back_curv.png'),
 };
 
-// --- post-processing: GTAO (girintilerde temas gölgesi) + hafif bloom (parlak sırtlar)
+// --- post-processing: GTAO (contact shadows in crevices) + subtle bloom (bright ridges)
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
@@ -194,16 +194,16 @@ new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load('emblem.web.glb', (g) =>
   });
   if (params.has('rot')) group.rotation.y = THREE.MathUtils.degToRad(+params.get('rot'));
   scene.add(group);
-  info.textContent = `${tris.toLocaleString('tr-TR')} üçgen · ${verts.toLocaleString('tr-TR')} vertex — sürükle: döndür, tekerlek: zoom`;
-}, (e) => { if (e.total) info.textContent = `Yükleniyor… %${Math.round(e.loaded / e.total * 100)}`; });
+  info.textContent = `${tris.toLocaleString('en-US')} triangles · ${verts.toLocaleString('en-US')} vertices — drag: rotate, wheel: zoom`;
+}, (e) => { if (e.total) info.textContent = `Loading… ${Math.round(e.loaded / e.total * 100)}%`; });
 
 const $ = (id) => document.getElementById(id);
 $('expo').oninput = (e) => renderer.toneMappingExposure = +e.target.value;
 $('grime').oninput = (e) => U.grimeAmt.value = +e.target.value;
 $('wear').oninput = (e) => U.wearAmt.value = +e.target.value;
 $('temper').oninput = (e) => Object.values(mats).forEach((m) => m.iridescence = +e.target.value);
-$('env').onclick = () => setEnv(envName === 'Stüdyo' ? 'Atölye' : 'Stüdyo');
-$('fx').onclick = () => { fx = !fx; $('fx').textContent = `Efektler: ${fx ? 'Açık' : 'Kapalı'}`; };
+$('env').onclick = () => setEnv(envName === 'Studio' ? 'Workshop' : 'Studio');
+$('fx').onclick = () => { fx = !fx; $('fx').textContent = `Effects: ${fx ? 'On' : 'Off'}`; };
 $('spin').onclick = () => spin = !spin;
 $('wire').onclick = () => Object.values(mats).forEach((m) => m.wireframe = !m.wireframe);
 addEventListener('resize', () => {
